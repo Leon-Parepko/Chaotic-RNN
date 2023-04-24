@@ -23,19 +23,18 @@ class Random_RNN(nn.Module):
     def random_graph_init(self):
 
         # --------------------- NEURONS INITIALIZATION ---------------------
-
         # Generate input, output and associative (between input and output) population of neurons
         input_neurons = []
         associative_neurons = []
         output_neurons = []
         for i in range(self.in_features):
-            input_neurons.append((i, {"type": "input", "activated": False, "forward": None}))
+            input_neurons.append((i, {"type": "input", "activated": False, "forward": None, 'color': 'lightblue', 'layer': 0}))
 
         for i in range(self.associative):
-            associative_neurons.append((i+self.in_features, {"type": "associative", "activated": False, "forward": None}))
+            associative_neurons.append((i+self.in_features, {"type": "associative", "activated": False, "forward": None, 'color': 'gold', 'layer': 1}))
 
         for i in range(self.out_features):
-            output_neurons.append((i + self.in_features + self.associative, {"type": "output", "activated": False, "forward": None}))
+            output_neurons.append((i + self.in_features + self.associative, {"type": "output", "activated": False, "forward": None, 'color': 'lightgreen', 'layer': 2}))
 
         # Initialize all nodes of the graph
         self.graph.add_nodes_from(input_neurons + associative_neurons + output_neurons)
@@ -43,108 +42,98 @@ class Random_RNN(nn.Module):
 
         # --------------------- EDGES INITIALIZATION ---------------------
         edges = []
-        percentile_connections = math.ceil(self.total_neurons * self.connections)   # User choosed amount of maximum connections for Input neurons
+        in_connected_neurons = []
+
+        associative_start_index = self.in_features
+        output_start_index = self.in_features + self.associative
 
 
+        # --- Generate edges for INPUT neurons
+        for input_index in range(0, associative_start_index):
+            req_out_connection = False
 
-        # Generate edges for INPUT neurons
-        for i in range(self.in_features):
+            for ass_index in range(associative_start_index, output_start_index):
 
-            # For each neuron track its possible connections
-            possible_connections = list(range(0, self.total_neurons))
+                # Create a connection with probability
+                if np.random.random() < self.connect_percentage:
+                    edges.append((input_index, ass_index))
+                    in_connected_neurons.append(ass_index)
+                    req_out_connection = True
 
-            # Firstly generate minimum required connection i'th input neuron.
-            # It could be Input -> Associative, Input -> Output or Input -> Input (but not to itself).
-            connection_index = 0
-            while True:
-                connection_index = np.random.randint(0, self.total_neurons - 1)
-                if connection_index != i:
-                    break
-            possible_connections.remove(connection_index)
-            edges.append((i, connection_index))
-
-            # Select not repeating random connections for i'th input neuron in given connections percentile.
-            # It could be Input -> Associative, Input -> Output or Input -> Input (Including itself).
-            # Hence, the maximum amount of connections for each input neuron is total_neurons.
-            for j in range(percentile_connections):
-                connection_index = np.random.choice(possible_connections)
-                possible_connections.remove(connection_index)
-                edges.append((i, connection_index))
+            # If no connection created, randomly chose one associative neuron and create a connection
+            if not req_out_connection:
+                ass_index = np.random.randint(associative_start_index, output_start_index)
+                edges.append((input_index, ass_index))
 
 
+        # --- Generate edges for ASSOCIATIVE neurons
+        for ass_index in range(associative_start_index, output_start_index):
+            req_out_connection = False
 
-       #  # Generate edges for ASSOCIATIVE neurons
-       #  for i in range(self.associative):
-       #      i += self.in_features
-       #
-       #      # Check for minimum required connections of i'th associative neuron.
-       #      # Should have 1 associative (non-recurrent) or 1 input input connection.
-       #      # Firstly search in existing edges
-       #      requirement_1 = False
-       #      for edge in edges:
-       #          if edge[1] == i:
-       #              requirement_1 = True
-       #              break
-       #      # If there is no already existing connection, create it from random input or associative neuron.
-       #      if not requirement_1:
-       #          presynaptic_neuron_index = 0
-       #          while True:
-       #              presynaptic_neuron_index = np.random.randint(0, self.in_features + self.associative - 1)
-       #              if presynaptic_neuron_index != i:
-       #                  break
-       #          edges.append((presynaptic_neuron_index, i))
-       #
-       #      # Should have 1 associative (non-recurrent) or 1 input or one output output connection.
-       #      possible_connections = list(range(0, self.total_neurons))
-       #
-       #      connection_index = 0
-       #      while True:
-       #          connection_index = np.random.randint(0, self.total_neurons - 1)
-       #          if connection_index != i:
-       #              break
-       #      possible_connections.remove(connection_index)
-       #      edges.append((i, connection_index))
-       #
-       #      # Select not repeating random connections for i'th associative neuron in given connections percentile.
-       #      # It could be Associative -> Associative (Including itself), Associative -> Output or Associative -> Input.
-       #      # Hence, the maximum amount of connections for each Associative neuron is total_neurons.
-       #      for j in range(percentile_connections):
-       #          connection_index = np.random.choice(possible_connections)
-       #          possible_connections.remove(connection_index)
-       #          edges.append((i, connection_index))
-       #
-       #
-       #
-       # # Generate edges for OUTPUT neurons
-       #  for i in range(self.out_features):
-       #      i += self.in_features + self.associative
-       #
-       #
-       #
+            # Enumerate over associative (for recurrent connections) and output neurons
+            for connection_index in range(associative_start_index, self.total_neurons):
+
+                # Create a connection with probability
+                if np.random.random() < self.connect_percentage:
+                    edges.append((ass_index, connection_index))
+
+                    # Recurrent relation is not considered as 'in' connection
+                    if ass_index != connection_index:
+                        in_connected_neurons.append(connection_index)
+                        req_out_connection = True
+
+            # If no 'out' connection created, randomly chose one associative or output neuron and create a connection
+            if not req_out_connection:
+
+                # Iterate until get not recurrent connection
+                while True:
+                    connection_index = np.random.randint(associative_start_index, self.total_neurons)
+                    if ass_index != connection_index:
+                        edges.append((ass_index, connection_index))
+                        break
+
+            # If no 'in' connection, randomly chose one input or associative neuron and create a connection
+            if ass_index not in in_connected_neurons:
+
+                # Iterate until get not recurrent connection
+                while True:
+                    connection_index = np.random.randint(0, output_start_index)
+                    if ass_index != connection_index:
+                        edges.append((connection_index, ass_index))
+                        break
+
+
+        # --- Generate edges for OUTPUT neurons
+        for output_index in range(output_start_index, self.total_neurons):
+
+            if output_index not in in_connected_neurons:
+                connection_index = np.random.randint(associative_start_index, output_start_index)
+                edges.append((connection_index, output_index))
+
+
+        # Finally, load edges into the graph
         self.graph.add_edges_from(edges)
 
 
 
-    def __init__(self, in_features, out_features, neurons, connections, device=None, dtype=None):
+    def __init__(self, in_features, out_features, neurons, connect_percentage, device=None, dtype=None):
         """
         :param in_features: Number of input features. This parameter would affect on the amount of neurons in the input layer.
         :param out_features: Number of input features. This parameter would affect on the amount of neurons in the output layer.
         :param neurons: Number of neurons in the chaotic graph (number of nodes).
-        :param connections: The percentage of connections would be generated, where 1.0 is fully connected graph/network and 0.01 is 1% of all possible connections in graph.
+        :param connect_percentage: The percentage of connections would be generated, where 1.0 is fully connected graph/network and 0.01 is 1% of all possible connections in graph.
         """
         factory_kwargs = {'device': device, 'dtype': dtype}
 
         super(Random_RNN, self).__init__()
-        self.graph = nx.Graph()                                                                 # Randomly initialize graph strucure
+        self.graph = nx.DiGraph()                                                                 # Randomly initialize graph strucure
         self.weight = Parameter(torch.empty((out_features, in_features), **factory_kwargs))
         self.weight.data.uniform_(0, 1)
         self.in_features = in_features
         self.out_features = out_features
         self.associative = neurons
-        self.connections = connections
+        self.connect_percentage = connect_percentage
         self.total_neurons = neurons + in_features + out_features
-        self.v = torch.zeros(in_features, **factory_kwargs)  # Initial membrane potential -70mv ~ 0
-        self.threshold = 20  # Threshold value -50mv ~ 20
 
         # Randomly initialize graph structure
         self.random_graph_init()
