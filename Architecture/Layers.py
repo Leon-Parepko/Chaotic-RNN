@@ -1,6 +1,7 @@
 import math
 import torch
 import torch.nn as nn
+from torch import Tensor
 from torch.nn.parameter import Parameter
 import networkx as nx
 import numpy as np
@@ -16,37 +17,106 @@ class Single_Neuron_Node:
     def forward(self, x):
         pass
 
-
-
 class Random_RNN(nn.Module):
 
+    __constants__ = ['in_features', 'out_features']
+    in_features: int
+    out_features: int
+    input_weights: Tensor
+    associative_weights: Tensor
+
+    def get_connections_num(self):
+        """
+        Calculate the number of 'out' connections
+         for INPUT and ASSOCIATIVE neurons.
+        :return: Dictionary {input, associative} number
+         of 'out' connections for INPUT and ASSOCIATIVE neurons.
+        """
+        associative_start_index = self.in_features
+        output_start_index = self.in_features + self.associative
+
+        connections = {'input': 0, 'associative': 0}
+
+        for i in range(self.in_features):
+                    connections['input'] += len(self.graph.edges(i))
+
+        for i in range(associative_start_index, output_start_index):
+                    connections['associative'] += len(self.graph.edges(i))
+
+        return connections
+
+
+    def arrange_weights(self):
+        """
+        Simply arranges all model weights on the
+         graph edges. It references the weights and put
+         them as an attributes of edges.
+        :return: None
+        """
+
+        input_w_counter = 0
+        ass_w_counter = 0
+
+        for node in self.graph.nodes(data=True):
+            for edge in self.graph.edges(node[0], data=True):
+                if node[1]["type"] == 'input':
+                    # TODO: FIX ASSIGNMENT
+                    edge["weight"] = self.input_weights[input_w_counter]
+                    input_w_counter += 1
+
+                elif node[1]["type"] == 'associative':
+                    # TODO: FIX ASSIGNMENT
+                    edge["weight"] = self.associative_weights[ass_w_counter]
+                    ass_w_counter += 1
+
+
     def random_graph_init(self):
+        """
+        Randomly initialize graph structure of the network based on the number of neurons and connection percentage.
+        :return: None
+        """
 
         # --------------------- NEURONS INITIALIZATION ---------------------
+
+        associative_start_index = self.in_features
+        output_start_index = self.in_features + self.associative
+
+        neurons = []
+
+        def test_forward(x):
+            return x
+
+        input_neuron_data = {"type": "input",
+                             "activated": False,
+                             "forward": test_forward,
+                             'color': 'lightblue',
+                             'layer': 0}
+        output_neuron_data = {"type": "output",
+                              "activated": False,
+                              "forward": test_forward,
+                              'color': 'lightgreen',
+                              'layer': 2}
+        associative_neuron_data = {"type": "associative",
+                                   "activated": False,
+                                   "forward": test_forward,
+                                   'color': 'gold',
+                                   'layer': 1}
+
         # Generate input, output and associative (between input and output) population of neurons
-        input_neurons = []
-        associative_neurons = []
-        output_neurons = []
         for i in range(self.in_features):
-            input_neurons.append((i, {"type": "input", "activated": False, "forward": None, 'color': 'lightblue', 'layer': 0}))
-
+            neurons.append((i, input_neuron_data))
         for i in range(self.associative):
-            associative_neurons.append((i+self.in_features, {"type": "associative", "activated": False, "forward": None, 'color': 'gold', 'layer': 1}))
-
+            neurons.append((associative_start_index + i, associative_neuron_data))
         for i in range(self.out_features):
-            output_neurons.append((i + self.in_features + self.associative, {"type": "output", "activated": False, "forward": None, 'color': 'lightgreen', 'layer': 2}))
+            neurons.append((output_start_index + i, output_neuron_data))
 
         # Initialize all nodes of the graph
-        self.graph.add_nodes_from(input_neurons + associative_neurons + output_neurons)
+        self.graph.add_nodes_from(neurons)
 
 
         # --------------------- EDGES INITIALIZATION ---------------------
         edges = []
         in_connected_neurons = []
-
-        associative_start_index = self.in_features
-        output_start_index = self.in_features + self.associative
-
 
         # --- Generate edges for INPUT neurons
         for input_index in range(0, associative_start_index):
@@ -56,14 +126,14 @@ class Random_RNN(nn.Module):
 
                 # Create a connection with probability
                 if np.random.random() < self.connect_percentage:
-                    edges.append((input_index, ass_index))
+                    edges.append((input_index, ass_index, {"weight": None}))
                     in_connected_neurons.append(ass_index)
                     req_out_connection = True
 
             # If no connection created, randomly chose one associative neuron and create a connection
             if not req_out_connection:
                 ass_index = np.random.randint(associative_start_index, output_start_index)
-                edges.append((input_index, ass_index))
+                edges.append((input_index, ass_index, {"weight": None}))
 
 
         # --- Generate edges for ASSOCIATIVE neurons
@@ -75,7 +145,7 @@ class Random_RNN(nn.Module):
 
                 # Create a connection with probability
                 if np.random.random() < self.connect_percentage:
-                    edges.append((ass_index, connection_index))
+                    edges.append((ass_index, connection_index, {"weight": None}))
 
                     # Recurrent relation is not considered as 'in' connection
                     if ass_index != connection_index:
@@ -89,7 +159,7 @@ class Random_RNN(nn.Module):
                 while True:
                     connection_index = np.random.randint(associative_start_index, self.total_neurons)
                     if ass_index != connection_index:
-                        edges.append((ass_index, connection_index))
+                        edges.append((ass_index, connection_index, {"weight": None}))
                         break
 
             # If no 'in' connection, randomly chose one input or associative neuron and create a connection
@@ -99,7 +169,7 @@ class Random_RNN(nn.Module):
                 while True:
                     connection_index = np.random.randint(0, output_start_index)
                     if ass_index != connection_index:
-                        edges.append((connection_index, ass_index))
+                        edges.append((connection_index, ass_index, {"weight": None}))
                         break
 
 
@@ -108,7 +178,7 @@ class Random_RNN(nn.Module):
 
             if output_index not in in_connected_neurons:
                 connection_index = np.random.randint(associative_start_index, output_start_index)
-                edges.append((connection_index, output_index))
+                edges.append((connection_index, output_index, {"weight": None}))
 
 
         # Finally, load edges into the graph
@@ -126,9 +196,7 @@ class Random_RNN(nn.Module):
         factory_kwargs = {'device': device, 'dtype': dtype}
 
         super(Random_RNN, self).__init__()
-        self.graph = nx.DiGraph()                                                                 # Randomly initialize graph strucure
-        self.weight = Parameter(torch.empty((out_features, in_features), **factory_kwargs))
-        self.weight.data.uniform_(0, 1)
+        self.graph = nx.DiGraph()
         self.in_features = in_features
         self.out_features = out_features
         self.associative = neurons
@@ -138,43 +206,23 @@ class Random_RNN(nn.Module):
         # Randomly initialize graph structure
         self.random_graph_init()
 
+        # Initialize weights for input and associative neurons as two vectors
+        conn_num = self.get_connections_num()
+        self.input_weights = Parameter(torch.empty((conn_num["input"], 1), **factory_kwargs))
+        self.associative_weights = Parameter(torch.empty((conn_num["associative"], 1), **factory_kwargs))
+        self.arrange_weights()
 
 
-    def forward(self, x, t):
-        # init spikes as zeros
-        spikes = torch.zeros(self.in_features)
 
-        # init pre spike history as zeros if it is none
-        if self.spike_history["pre"] is None:
-            self.spike_history["pre"] = torch.zeros(x.shape[1])
 
-        # Update pre history if any pre spikes
-        for i in range(x.shape[1]):
-            if x[0][i] > 0:
-                self.spike_history["pre"][i] = 1
+    def forward(self, x):
+        # Initialize output tensor
+        output = torch.zeros((x.shape[0], self.out_features), device=x.device)
 
-            elif self.spike_history["pre"][i] >= 1:
-                self.spike_history["pre"][i] += 1
+        # forward all input neurons
+        for i in range(0, self.in_features):
+            pass
 
-        # Weighted normalized sum of x for each neuron
-        sum = torch.sum(x, 1)
-
-        # Leak
-        self.v *= math.exp(
-            -0.01 / self.tau)  # Analytical solution to the differential equation dv/dt = -1/tau * (v - v_0)
-        # Integrate
-        self.v += sum * 10  # maximum 10mv per spike
-        # Fire
-        for i in range(0, self.v.shape[0]):
-            if self.v[i] >= self.threshold:  # Check if any neuron has fired
-                spikes[i] = 1
-                self.v[i] = 0
-
-        # Update spike history
-        self.spike_history["cur"] = spikes
-
-        # Normalize output
-        return (spikes * self.weight) / self.in_features
 
 
 

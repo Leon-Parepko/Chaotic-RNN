@@ -1,4 +1,4 @@
-torch
+torch~=1.13.1
 jupyter
-numpy
-networkx
+numpy~=1.21.6
+networkx~=2.6.3
