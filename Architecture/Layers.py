@@ -6,7 +6,6 @@ import torch.nn.functional as F
 import networkx as nx
 import numpy as np
 
-
 class Random_RNN(nn.Module):
     __constants__ = ['in_features', 'out_features']
     in_features: int
@@ -25,7 +24,6 @@ class Random_RNN(nn.Module):
         factory_kwargs = {'device': device, 'dtype': dtype}
 
         super(Random_RNN, self).__init__()
-        self.graph = nx.DiGraph()
         self.activation = activation
         self.in_features = in_features
         self.associative = neurons
@@ -33,8 +31,12 @@ class Random_RNN(nn.Module):
         self.connect_percentage = connect_percentage
         self.total_neurons = neurons + in_features + out_features
 
-        # Randomly initialize graph structure
-        self.random_graph_init()
+        # Randomly initialize graph structure until it is stable
+        while True:
+            self.graph = nx.DiGraph()
+            self.random_graph_init()
+            if self.prapagation_check():
+                break
 
         # Initialize weights for input and associative neurons as two vectors
         conn_num = self.get_connections_num()
@@ -44,7 +46,7 @@ class Random_RNN(nn.Module):
         self.init_weights()
 
 
-    def forward(self, x):
+    def forward(self, x, return_work_time=False):
         """
         Forward pass of the network. Here each neuron in a graph
          might have 3 states (inactive, working, activated)
@@ -82,6 +84,8 @@ class Random_RNN(nn.Module):
         # Forward all associative neurons until all neurons are activated
         ass_active = [False for _ in range(self.associative)]
         work_time = 1
+        max_work_time = self.associative + 2
+
         while not all(ass_active):
             for neuron_index, data in self.graph.nodes(data=True):
                 if data["type"] == 'associative' and data["status"] == "working":
@@ -105,6 +109,10 @@ class Random_RNN(nn.Module):
 
             work_time += 1
 
+            # If the work time excite maximum possible, return zeros Y and +inf work time
+            if work_time >= max_work_time:
+                # print("WORK TIME ERROR!!!!")
+                return (Y, float("inf")) if return_work_time else Y
 
         # Forward all output neurons and write the result
         i = 0
@@ -117,9 +125,25 @@ class Random_RNN(nn.Module):
                 self.activate_neuron(neuron_index, working=False)
                 i += 1
 
-        # print(work_time)
+        # Check if all neurons are activated
+        # for i, data in self.graph.nodes(data=True):
+        #     if data['status'] != 'activated':
+        #         print(f"ERROR: {i} neuron - {data}")
 
-        return Y
+        return (Y, work_time) if return_work_time else Y
+
+
+    def prapagation_check(self):
+        """
+
+        :return:
+        """
+        X_test = torch.ones(self.in_features).view(-1, self.in_features)
+        if self.forward(X_test, return_work_time=True)[1] != float("inf"):
+            return True
+
+        else:
+            return False
 
 
     def activate_neuron(self, index, working=True, erase_mem=False):
@@ -220,7 +244,6 @@ class Random_RNN(nn.Module):
         """
 
         # --------------------- NEURONS INITIALIZATION ---------------------
-
         associative_start_index = self.in_features
         output_start_index = self.in_features + self.associative
 
@@ -228,7 +251,7 @@ class Random_RNN(nn.Module):
 
         def test_forward(x, w):
             # print(w, x)
-            return F.relu(w * sum(x))
+            return torch.tanh(w * sum(x))
 
         input_neuron_data = {"type": "input",
                              "status": "inactive",
@@ -273,14 +296,14 @@ class Random_RNN(nn.Module):
 
                 # Create a connection with probability
                 if np.random.random() < self.connect_percentage:
-                    edges.append((input_index, ass_index, {"weight": None}))
+                    edges.append((input_index, ass_index))
                     in_connected_neurons.append(ass_index)
                     req_out_connection = True
 
             # If no connection created, randomly chose one associative neuron and create a connection
             if not req_out_connection:
                 ass_index = np.random.randint(associative_start_index, output_start_index)
-                edges.append((input_index, ass_index, {"weight": None}))
+                edges.append((input_index, ass_index))
 
 
         # --- Generate edges for ASSOCIATIVE neurons
@@ -292,7 +315,7 @@ class Random_RNN(nn.Module):
 
                 # Create a connection with probability
                 if np.random.random() < self.connect_percentage:
-                    edges.append((ass_index, connection_index, {"weight": None}))
+                    edges.append((ass_index, connection_index))
 
                     # Recurrent relation is not considered as 'in' connection
                     if ass_index != connection_index:
@@ -306,7 +329,7 @@ class Random_RNN(nn.Module):
                 while True:
                     connection_index = np.random.randint(associative_start_index, self.total_neurons)
                     if ass_index != connection_index:
-                        edges.append((ass_index, connection_index, {"weight": None}))
+                        edges.append((ass_index, connection_index))
                         break
 
             # If no 'in' connection, randomly chose one input or associative neuron and create a connection
@@ -316,7 +339,7 @@ class Random_RNN(nn.Module):
                 while True:
                     connection_index = np.random.randint(0, output_start_index)
                     if ass_index != connection_index:
-                        edges.append((connection_index, ass_index, {"weight": None}))
+                        edges.append((connection_index, ass_index))
                         break
 
 
@@ -325,19 +348,24 @@ class Random_RNN(nn.Module):
 
             if output_index not in in_connected_neurons:
                 connection_index = np.random.randint(associative_start_index, output_start_index)
-                edges.append((connection_index, output_index, {"weight": None}))
+                edges.append((connection_index, output_index))
 
 
         # Finally, load edges into the graph
         self.graph.add_edges_from(edges)
+        nx.set_edge_attributes(self.graph, torch.tensor([0.0]), "weight")
+        return
 
 
     def restruct(self, connect_percentage=None):
         if connect_percentage is not None:
             self.connect_percentage = connect_percentage
 
-        self.graph = nx.DiGraph()
-        self.random_graph_init()
+        while True:
+            self.graph = nx.DiGraph()
+            self.random_graph_init()
+            if self.prapagation_check():
+                break
         conn_num = self.get_connections_num()
         self.input_weights = Parameter(torch.empty((conn_num["input"], 1)))
         self.associative_weights = Parameter(torch.empty((conn_num["associative"], 1)))
