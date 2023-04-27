@@ -2,3 +2,4 @@ torch~=1.13.1
 jupyter
 numpy~=1.21.6
 networkx~=2.6.3
+tqdm~=4.62.3

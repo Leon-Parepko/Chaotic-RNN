@@ -2,19 +2,10 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.nn.parameter import Parameter
+import torch.nn.functional as F
 import networkx as nx
 import numpy as np
 
-
-class Single_Neuron_Node:
-    def __init__(self, type, inputs, outputs):
-        self.type = type
-        self.inputs = inputs
-        self.outputs = outputs
-        self.activated = False
-
-    def forward(self, x):
-        pass
 
 class Random_RNN(nn.Module):
     __constants__ = ['in_features', 'out_features']
@@ -22,6 +13,151 @@ class Random_RNN(nn.Module):
     out_features: int
     input_weights: Tensor
     associative_weights: Tensor
+
+
+    def __init__(self, in_features, out_features, neurons, connect_percentage, device=None, dtype=None, activation=F.relu):
+        """
+        :param in_features: Number of input features. This parameter would affect on the amount of neurons in the input layer.
+        :param out_features: Number of input features. This parameter would affect on the amount of neurons in the output layer.
+        :param neurons: Number of neurons in the chaotic graph (number of nodes).
+        :param connect_percentage: The percentage of connections would be generated, where 1.0 is fully connected graph/network and 0.01 is 1% of all possible connections in graph.
+        """
+        factory_kwargs = {'device': device, 'dtype': dtype}
+
+        super(Random_RNN, self).__init__()
+        self.graph = nx.DiGraph()
+        self.activation = activation
+        self.in_features = in_features
+        self.associative = neurons
+        self.out_features = out_features
+        self.connect_percentage = connect_percentage
+        self.total_neurons = neurons + in_features + out_features
+
+        # Randomly initialize graph structure
+        self.random_graph_init()
+
+        # Initialize weights for input and associative neurons as two vectors
+        conn_num = self.get_connections_num()
+        self.input_weights = Parameter(torch.empty((conn_num["input"], 1), **factory_kwargs))
+        self.associative_weights = Parameter(torch.empty((conn_num["associative"], 1), **factory_kwargs))
+        self.arrange_weights()
+        self.init_weights()
+
+
+    def forward(self, x):
+        """
+        Forward pass of the network. Here each neuron in a graph
+         might have 3 states (inactive, working, activated)
+        :param x: Input tensor
+        :return: Output tensor
+        """
+
+        # Reset all neurons to be not activated
+        self.reset_neurons_states()
+        # self.reset_neurons_memory()
+
+        # Increase dimensions of the input tensor
+        X = x.clone()[0].unsqueeze(1)
+        Y = torch.zeros((self.out_features, ))
+
+        # Forward all input neurons
+        for i, (neuron_index, data) in enumerate(self.graph.nodes(data=True)):
+            if data["type"] == 'input':
+                forward_fn = data["forward"]
+
+                # Get all edges of the current neuron
+                for edge in self.graph.edges(neuron_index, data=True):
+                    weight = edge[2]["weight"]
+                    conn_neuron = self.graph.nodes(data=True)[edge[1]]
+                    conn_neuron["memory"].append(forward_fn(X[i], weight))
+
+                    # Activate all connected neurons to working state
+                    self.activate_neuron(edge[1], working=True)
+
+                # Set the current neuron as activated (skipping working state)
+                self.activate_neuron(neuron_index, working=False)
+
+
+
+        # Forward all associative neurons until all neurons are activated
+        ass_active = [False for _ in range(self.associative)]
+        work_time = 1
+        while not all(ass_active):
+            for neuron_index, data in self.graph.nodes(data=True):
+                if data["type"] == 'associative' and data["status"] == "working":
+                    forward_fn = data["forward"]
+                    memory = data["memory"]
+
+                    # Get all edges of the current neuron
+                    for edge in self.graph.edges(neuron_index, data=True):
+                        weight = edge[2]["weight"]
+                        conn_neuron = self.graph.nodes(data=True)[edge[1]]
+
+                        # Send signal to the memory
+                        conn_neuron["memory"].append(forward_fn(memory, weight))
+
+                        # Activate connected neuron to working state if it is inactive
+                        if conn_neuron["status"] == "inactive":
+                            self.activate_neuron(edge[1], working=True)
+
+                    self.activate_neuron(neuron_index, working=False)
+                    ass_active[neuron_index - self.in_features] = True
+
+            work_time += 1
+
+
+        # Forward all output neurons and write the result
+        i = 0
+        for neuron_index, data in self.graph.nodes(data=True):
+            if data["type"] == 'output':
+                forward_fn = data["forward"]
+                memory = data["memory"]
+                Y[i] = forward_fn(memory, 1)
+
+                self.activate_neuron(neuron_index, working=False)
+                i += 1
+
+        # print(work_time)
+
+        return Y
+
+
+    def activate_neuron(self, index, working=True, erase_mem=False):
+        """
+
+        :param index:
+        :return:
+        """
+        neuron = self.graph.nodes[index]
+
+        if working:
+            neuron["status"] = "working"
+
+        else:
+            neuron["status"] = "activated"
+            neuron["memory"] = []
+
+        return
+
+
+    def reset_neurons_states(self):
+        """
+        Reset all neurons to be not activated
+        :return: none
+        """
+        for i, data in self.graph.nodes(data=True):
+            self.graph.nodes[i]["status"] = "inactive"
+        return
+
+
+    def reset_neurons_memory(self):
+        """
+        Reset all neurons to have empty memory
+        :return: none
+        """
+        for i, data in self.graph.nodes(data=True):
+            self.graph.nodes[i]["memory"] = []
+        return
 
 
     def get_connections_num(self):
@@ -63,7 +199,18 @@ class Random_RNN(nn.Module):
 
                 elif node[1]["type"] == 'associative':
                     edge[2]["weight"] = self.associative_weights[ass_w_counter]
-                    ass_w_counter += 1
+                    ass_w_counter += 1\
+
+
+    def init_weights(self):
+        """
+        Initialize all weights in the network
+        as random values from uniform distribution.
+        :return: None
+        """
+        nn.init.uniform_(self.input_weights, -1, 1)
+        nn.init.uniform_(self.associative_weights, -1, 1)
+        return
 
 
     def random_graph_init(self):
@@ -79,21 +226,25 @@ class Random_RNN(nn.Module):
 
         neurons = []
 
-        def test_forward(x):
-            return x
+        def test_forward(x, w):
+            # print(w, x)
+            return F.relu(w * sum(x))
 
         input_neuron_data = {"type": "input",
-                             "activated": False,
+                             "status": "inactive",
                              "forward": test_forward,
+                             "memory": [],
                              'color': 'lightblue',
                              'layer': 0}
         output_neuron_data = {"type": "output",
-                              "activated": False,
+                              "status": "inactive",
+                              "memory": [],
                               "forward": test_forward,
                               'color': 'lightgreen',
                               'layer': 2}
         associative_neuron_data = {"type": "associative",
-                                   "activated": False,
+                                   "status": "inactive",
+                                   "memory": [],
                                    "forward": test_forward,
                                    'color': 'gold',
                                    'layer': 1}
@@ -181,40 +332,15 @@ class Random_RNN(nn.Module):
         self.graph.add_edges_from(edges)
 
 
+    def restruct(self, connect_percentage=None):
+        if connect_percentage is not None:
+            self.connect_percentage = connect_percentage
 
-    def __init__(self, in_features, out_features, neurons, connect_percentage, device=None, dtype=None):
-        """
-        :param in_features: Number of input features. This parameter would affect on the amount of neurons in the input layer.
-        :param out_features: Number of input features. This parameter would affect on the amount of neurons in the output layer.
-        :param neurons: Number of neurons in the chaotic graph (number of nodes).
-        :param connect_percentage: The percentage of connections would be generated, where 1.0 is fully connected graph/network and 0.01 is 1% of all possible connections in graph.
-        """
-        factory_kwargs = {'device': device, 'dtype': dtype}
-
-        super(Random_RNN, self).__init__()
         self.graph = nx.DiGraph()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.associative = neurons
-        self.connect_percentage = connect_percentage
-        self.total_neurons = neurons + in_features + out_features
-
-        # Randomly initialize graph structure
         self.random_graph_init()
-
-        # Initialize weights for input and associative neurons as two vectors
         conn_num = self.get_connections_num()
-        self.input_weights = Parameter(torch.empty((conn_num["input"], 1), **factory_kwargs))
-        self.associative_weights = Parameter(torch.empty((conn_num["associative"], 1), **factory_kwargs))
+        self.input_weights = Parameter(torch.empty((conn_num["input"], 1)))
+        self.associative_weights = Parameter(torch.empty((conn_num["associative"], 1)))
         self.arrange_weights()
-
-
-
-
-    def forward(self, x):
-        # Initialize output tensor
-        output = torch.zeros((x.shape[0], self.out_features), device=x.device)
-
-        # forward all input neurons
-        for i in range(0, self.in_features):
-            pass
+        self.init_weights()
+        return
