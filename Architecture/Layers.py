@@ -120,7 +120,7 @@ class Random_RNN(nn.Module):
             if data["type"] == 'output':
                 forward_fn = data["forward"]
                 memory = data["memory"]
-                Y[i] = forward_fn(memory, 1)
+                Y[i] = forward_fn(memory, torch.tensor([1]))
 
                 self.activate_neuron(neuron_index, working=False)
                 i += 1
@@ -250,7 +250,8 @@ class Random_RNN(nn.Module):
         neurons = []
 
         def test_forward(x, w):
-            # print(w, x)
+            # print(x, w)
+            w = w.clone()
             return torch.tanh(w * sum(x))
 
         input_neuron_data = {"type": "input",
