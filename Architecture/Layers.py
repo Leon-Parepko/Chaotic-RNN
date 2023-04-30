@@ -2,25 +2,49 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.nn.parameter import Parameter
-import torch.nn.functional as F
 import networkx as nx
 import numpy as np
 
 class ChaoticRNN(nn.Module):
+    r"""
+    Applies a custom chaotic recurrent layer (Elman RNN but with
+     reduced number of connections) over an input signal.
+     It generates a graph with a given number of neurons and connections
+     between them with a given probability.
+
+     Args:
+        :param in_features: Number of input features (input neurons).
+        :param out_features: Number of output features (output neurons).
+        :param neurons: Number of associative neurons (hidden neurons).
+        :param connect_percentage: Percentage of connections between
+         neurons (0.0 - 1.0). Here the vqlue coud be interpreted as a
+         probability of connection between neurons.
+        :param activation: Activation function of the network.
+        :param device: Device to run the network.
+        :param dtype: Data type of the network.
+
+    Examples::
+        >>> m = ChaoticRNN(10, 50, 4, 0.3)
+        >>> input = torch.randn(1, 10)
+        >>> output = m(input)
+        >>> print(output.size())
+        torch.Size([50])
+    """
+
     __constants__ = ['in_features', 'out_features']
     in_features: int
+    associative: int
     out_features: int
     input_weights: Tensor
     associative_weights: Tensor
+    graph: nx.DiGraph
+    activation: callable
+    connect_percentage: float
 
+    #TODO: Add type of data forwarding (one -> one, one -> many, many -> one, many -> many)
 
-    def __init__(self, in_features, out_features, neurons, connect_percentage, device='cpu', dtype=None, activation=F.relu):
-        """
-        :param in_features: Number of input features. This parameter would affect on the amount of neurons in the input layer.
-        :param out_features: Number of input features. This parameter would affect on the amount of neurons in the output layer.
-        :param neurons: Number of neurons in the chaotic graph (number of nodes).
-        :param connect_percentage: The percentage of connections would be generated, where 1.0 is fully connected graph/network and 0.01 is 1% of all possible connections in graph.
-        """
+    def __init__(self, in_features, out_features, neurons, connect_percentage, activation=torch.tanh, device='cpu', dtype=None):
+
         factory_kwargs = {'device': device, 'dtype': dtype}
 
         super(ChaoticRNN, self).__init__()
@@ -35,16 +59,16 @@ class ChaoticRNN(nn.Module):
         # Randomly initialize graph structure until it is stable
         while True:
             self.graph = nx.DiGraph()
-            self.random_graph_init()
-            if self.prapagation_check():
+            self.__random_graph_init()
+            if self.propagation_check():
                 break
 
         # Initialize weights for input and associative neurons as two vectors
-        conn_num = self.get_connections_num()
+        conn_num = self.__get_connections_num()
         self.input_weights = Parameter(torch.empty((conn_num["input"], 1), **factory_kwargs))
         self.associative_weights = Parameter(torch.empty((conn_num["associative"], 1), **factory_kwargs))
-        self.arrange_weights()
-        self.init_weights()
+        self.__arrange_weights()
+        self.__init_weights()
 
 
     def to(self, *args, **kwargs):
@@ -89,10 +113,10 @@ class ChaoticRNN(nn.Module):
                     conn_neuron["memory"].append(forward_fn(X[i], weight))
 
                     # Activate all connected neurons to working state
-                    self.activate_neuron(edge[1], working=True)
+                    self.__activate_neuron(edge[1], working=True)
 
                 # Set the current neuron as activated (skipping working state)
-                self.activate_neuron(neuron_index, working=False)
+                self.__activate_neuron(neuron_index, working=False)
 
 
 
@@ -117,9 +141,9 @@ class ChaoticRNN(nn.Module):
 
                         # Activate connected neuron to working state if it is inactive
                         if conn_neuron["status"] == "inactive":
-                            self.activate_neuron(edge[1], working=True)
+                            self.__activate_neuron(edge[1], working=True)
 
-                    self.activate_neuron(neuron_index, working=False)
+                    self.__activate_neuron(neuron_index, working=False)
                     ass_active[neuron_index - self.in_features] = True
 
             work_time += 1
@@ -137,7 +161,7 @@ class ChaoticRNN(nn.Module):
                 memory = data["memory"]
                 Y[i] = forward_fn(memory, torch.tensor([1]))
 
-                self.activate_neuron(neuron_index, working=False)
+                self.__activate_neuron(neuron_index, working=False)
                 i += 1
 
         # Check if all neurons are activated
@@ -148,7 +172,51 @@ class ChaoticRNN(nn.Module):
         return (Y, work_time) if return_work_time else Y
 
 
-    def prapagation_check(self):
+    def restruct(self, connect_percentage=None):
+        """
+        Restructure the network by randomly initializing
+         the graph structure and weights until it is stable.
+        :param connect_percentage: Percentage of connections in the graph
+         if it is None, the default value is used from the constructor.
+        :return: None
+        """
+        if connect_percentage is not None:
+            self.connect_percentage = connect_percentage
+
+        while True:
+            self.graph = nx.DiGraph()
+            self.__random_graph_init()
+            if self.propagation_check():
+                break
+        conn_num = self.__get_connections_num()
+        self.input_weights = Parameter(torch.empty((conn_num["input"], 1)))
+        self.associative_weights = Parameter(torch.empty((conn_num["associative"], 1)))
+        self.__arrange_weights()
+        self.__init_weights()
+        return
+
+
+    def reset_neurons_memory(self):
+        """
+        Reset all neurons to have empty memory
+        :return: none
+        """
+        for i, data in self.graph.nodes(data=True):
+            self.graph.nodes[i]["memory"] = []
+        return
+
+
+    def reset_neurons_states(self):
+        """
+        Reset all neurons to be inactive.
+        :return: none
+        """
+        for i, data in self.graph.nodes(data=True):
+            self.graph.nodes[i]["status"] = "inactive"
+        return
+
+
+    def propagation_check(self):
         """
         Check if the network is able to propagate the signal from input to output
         :return: True if the network is able to propagate the signal, False otherwise
@@ -161,7 +229,7 @@ class ChaoticRNN(nn.Module):
             return False
 
 
-    def activate_neuron(self, index, working=True):
+    def __activate_neuron(self, index, working=True):
         """
         Activate the neuron with the given index.
          If working is True, the neuron is set to
@@ -184,27 +252,7 @@ class ChaoticRNN(nn.Module):
         return
 
 
-    def reset_neurons_states(self):
-        """
-        Reset all neurons to be inactive.
-        :return: none
-        """
-        for i, data in self.graph.nodes(data=True):
-            self.graph.nodes[i]["status"] = "inactive"
-        return
-
-
-    def reset_neurons_memory(self):
-        """
-        Reset all neurons to have empty memory
-        :return: none
-        """
-        for i, data in self.graph.nodes(data=True):
-            self.graph.nodes[i]["memory"] = []
-        return
-
-
-    def get_connections_num(self):
+    def __get_connections_num(self):
         """
         Calculate the number of 'out' connections
          for INPUT and ASSOCIATIVE neurons.
@@ -225,7 +273,7 @@ class ChaoticRNN(nn.Module):
         return connections
 
 
-    def arrange_weights(self):
+    def __arrange_weights(self):
         """
         Simply arranges all model weights on the
          graph edges. It references the weights and put
@@ -246,7 +294,7 @@ class ChaoticRNN(nn.Module):
                     ass_w_counter += 1\
 
 
-    def init_weights(self):
+    def __init_weights(self):
         """
         Initialize all weights in the network
         as random values from uniform distribution.
@@ -257,7 +305,7 @@ class ChaoticRNN(nn.Module):
         return
 
 
-    def random_graph_init(self):
+    def __random_graph_init(self):
         """
         Randomly initialize graph structure
          of the network based on the number of
@@ -271,7 +319,7 @@ class ChaoticRNN(nn.Module):
 
         neurons = []
 
-        def test_forward(x, w):
+        def simple_forward(x, w):
             """
             Function used for forwarding each neuron.
             :param x: Input array of signals.
@@ -279,24 +327,24 @@ class ChaoticRNN(nn.Module):
             :return: Output of a neuron (single value).
             """
             w = w.clone()
-            return torch.tanh(w.to(self.device) * sum(x).to(self.device))
+            return self.activation(w.to(self.device) * sum(x).to(self.device))
 
         input_neuron_data = {"type": "input",
                              "status": "inactive",
-                             "forward": test_forward,
+                             "forward": simple_forward,
                              "memory": [],
                              'color': 'lightblue',
                              'layer': 0}
         output_neuron_data = {"type": "output",
                               "status": "inactive",
                               "memory": [],
-                              "forward": test_forward,
+                              "forward": simple_forward,
                               'color': 'lightgreen',
                               'layer': 2}
         associative_neuron_data = {"type": "associative",
                                    "status": "inactive",
                                    "memory": [],
-                                   "forward": test_forward,
+                                   "forward": simple_forward,
                                    'color': 'gold',
                                    'layer': 1}
 
@@ -384,19 +432,3 @@ class ChaoticRNN(nn.Module):
         nx.set_edge_attributes(self.graph, torch.tensor([0.0]), "weight")
         return
 
-
-    def restruct(self, connect_percentage=None):
-        if connect_percentage is not None:
-            self.connect_percentage = connect_percentage
-
-        while True:
-            self.graph = nx.DiGraph()
-            self.random_graph_init()
-            if self.prapagation_check():
-                break
-        conn_num = self.get_connections_num()
-        self.input_weights = Parameter(torch.empty((conn_num["input"], 1)))
-        self.associative_weights = Parameter(torch.empty((conn_num["associative"], 1)))
-        self.arrange_weights()
-        self.init_weights()
-        return
