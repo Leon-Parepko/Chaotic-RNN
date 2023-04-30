@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import networkx as nx
 import numpy as np
 
-class Random_RNN(nn.Module):
+class ChaoticRNN(nn.Module):
     __constants__ = ['in_features', 'out_features']
     in_features: int
     out_features: int
@@ -14,7 +14,7 @@ class Random_RNN(nn.Module):
     associative_weights: Tensor
 
 
-    def __init__(self, in_features, out_features, neurons, connect_percentage, device=None, dtype=None, activation=F.relu):
+    def __init__(self, in_features, out_features, neurons, connect_percentage, device='cpu', dtype=None, activation=F.relu):
         """
         :param in_features: Number of input features. This parameter would affect on the amount of neurons in the input layer.
         :param out_features: Number of input features. This parameter would affect on the amount of neurons in the output layer.
@@ -23,7 +23,8 @@ class Random_RNN(nn.Module):
         """
         factory_kwargs = {'device': device, 'dtype': dtype}
 
-        super(Random_RNN, self).__init__()
+        super(ChaoticRNN, self).__init__()
+        self.device = device
         self.activation = activation
         self.in_features = in_features
         self.associative = neurons
@@ -46,13 +47,27 @@ class Random_RNN(nn.Module):
         self.init_weights()
 
 
+    def to(self, *args, **kwargs):
+        """
+        Override the default to() method to set the device
+        :return: self
+        """
+        self = super().to(*args, **kwargs)
+        self.device = args[0]
+        return self
+
+
     def forward(self, x, return_work_time=False):
         """
         Forward pass of the network. Here each neuron in a graph
-         might have 3 states (inactive, working, activated)
+         might have 3 states (inactive, working, activated). The network
+         is working until all neurons are activated.
         :param x: Input tensor
+        :param return_work_time: If True, the function returns the work time of the network
         :return: Output tensor
         """
+
+
 
         # Reset all neurons to be not activated
         self.reset_neurons_states()
@@ -135,8 +150,8 @@ class Random_RNN(nn.Module):
 
     def prapagation_check(self):
         """
-
-        :return:
+        Check if the network is able to propagate the signal from input to output
+        :return: True if the network is able to propagate the signal, False otherwise
         """
         X_test = torch.ones(self.in_features).view(-1, self.in_features)
         if self.forward(X_test, return_work_time=True)[1] != float("inf"):
@@ -146,11 +161,16 @@ class Random_RNN(nn.Module):
             return False
 
 
-    def activate_neuron(self, index, working=True, erase_mem=False):
+    def activate_neuron(self, index, working=True):
         """
-
-        :param index:
-        :return:
+        Activate the neuron with the given index.
+         If working is True, the neuron is set to
+         working state (memory is not erased). If working
+         is False, the neuron is set to activated state
+         and memory is erased.
+        :param index: Index of the neuron to activate
+        :param working: If True, the neuron is set to working state
+        :return: none
         """
         neuron = self.graph.nodes[index]
 
@@ -166,7 +186,7 @@ class Random_RNN(nn.Module):
 
     def reset_neurons_states(self):
         """
-        Reset all neurons to be not activated
+        Reset all neurons to be inactive.
         :return: none
         """
         for i, data in self.graph.nodes(data=True):
@@ -197,10 +217,10 @@ class Random_RNN(nn.Module):
         connections = {'input': 0, 'associative': 0}
 
         for i in range(self.in_features):
-                    connections['input'] += len(self.graph.edges(i))
+            connections['input'] += len(self.graph.edges(i))
 
         for i in range(associative_start_index, output_start_index):
-                    connections['associative'] += len(self.graph.edges(i))
+            connections['associative'] += len(self.graph.edges(i))
 
         return connections
 
@@ -239,7 +259,9 @@ class Random_RNN(nn.Module):
 
     def random_graph_init(self):
         """
-        Randomly initialize graph structure of the network based on the number of neurons and connection percentage.
+        Randomly initialize graph structure
+         of the network based on the number of
+         neurons and connection percentage.
         :return: None
         """
 
@@ -250,9 +272,14 @@ class Random_RNN(nn.Module):
         neurons = []
 
         def test_forward(x, w):
-            # print(x, w)
+            """
+            Function used for forwarding each neuron.
+            :param x: Input array of signals.
+            :param w: Weight.
+            :return: Output of a neuron (single value).
+            """
             w = w.clone()
-            return torch.tanh(w * sum(x))
+            return torch.tanh(w.to(self.device) * sum(x).to(self.device))
 
         input_neuron_data = {"type": "input",
                              "status": "inactive",
