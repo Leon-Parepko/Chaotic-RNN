@@ -4,6 +4,7 @@ from torch import Tensor
 from torch.nn.parameter import Parameter
 import networkx as nx
 import numpy as np
+import matplotlib.pyplot as plt
 
 class ChaoticRNN(nn.Module):
     r"""
@@ -227,6 +228,36 @@ class ChaoticRNN(nn.Module):
 
         else:
             return False
+
+
+    def visualize(self, filename=None, with_labels=False):
+        """
+        Visualize the network graph.
+        :param filename: Name of the file to save the graph image.
+         If it is None, the graph is shown.
+        :return: none
+        """
+
+        plt.figure(figsize=(16, 8))
+
+        plt.subplot(121)
+        pos = nx.multipartite_layout(self.graph, subset_key="layer")
+        nx.draw(self.graph, pos, node_color=[n[1]["color"] for n in self.graph.nodes(data=True)],
+                with_labels=with_labels)
+        plt.title('Multipartite Layout')
+
+        plt.subplot(122)
+        nx.draw(self.graph, node_color=[n[1]["color"] for n in self.graph.nodes(data=True)], node_size=500,
+                alpha=0.8, with_labels=with_labels)
+        plt.title('Spring Layout')
+
+        if filename is None:
+            plt.show()
+
+        else:
+            plt.savefig(filename)
+
+        return
 
 
     def __activate_neuron(self, index, working=True):
